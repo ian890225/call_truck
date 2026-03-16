@@ -47,18 +47,37 @@ def fetch_files_from_drive(folder_id, service):
         items = results.get('files', [])
         downloaded_files = []
         for item in items:
-            if item['name'].endswith(('.xlsx', '.csv', '.xls')):
-                request = service.files().get_media(fileId=item['id'])
+            file_name = item['name']
+            mime_type = item['mimeType']
+            
+            # 只抓取結尾是 Excel 或 CSV 的檔案
+            if file_name.endswith(('.xlsx', '.csv', '.xls')):
+                
+                # 【關鍵修正】：判斷檔案是否被 Google 轉換成了線上試算表
+                if mime_type == 'application/vnd.google-apps.spreadsheet':
+                    # 若是線上試算表，強制匯出成實體 .xlsx 檔案
+                    request = service.files().export_media(
+                        fileId=item['id'], 
+                        mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    )
+                else:
+                    # 一般實體檔案，直接下載
+                    request = service.files().get_media(fileId=item['id'])
+                
+                # 防呆：確保 request 不是空的
+                if request is None:
+                    continue
+                    
                 fh = BytesIO()
                 downloader = MediaIoBaseDownload(fh, request)
                 done = False
                 while done is False:
                     status, done = downloader.next_chunk()
                 fh.seek(0)
-                downloaded_files.append({'name': item['name'], 'content': fh})
+                downloaded_files.append({'name': file_name, 'content': fh})
         return downloaded_files
     except Exception as e:
-        st.error(f"❌ 讀取資料夾失敗，請確認 ID 是否正確或虛擬員工是否有共用權限！錯誤：{e}")
+        st.error(f"❌ 讀取資料夾失敗！錯誤：{e}")
         return []
 
 # 防呆檢查：確認使用者是否有替換預設的 ID
