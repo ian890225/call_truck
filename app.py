@@ -11,16 +11,16 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 # 設定網頁標題與寬度
-st.set_page_config(page_title="四零四案 - 叫車排程系統", page_icon="🚛", layout="wide")
+st.set_page_config(page_title="叫車排程系統", page_icon="🚛", layout="wide")
 
 # =====================================================================
 # ⬇️ 請在這裡填入您 Google Drive 的資料夾與檔案 ID ⬇️
-CTRL_FOLDER_ID = '這裡貼上管制表資料夾ID'
-SHIP_FOLDER_ID = '這裡貼上出貨單資料夾ID'
-MASTER_FILE_ID = '這裡貼上一覽表檔案ID'  # 例如: '1B3d4E5f6G7h8I9j0K1lM'
+CTRL_FOLDER_ID = '1Cd8OWf6unmQP0qZax6jXMp3AdHaaEUDG'
+SHIP_FOLDER_ID = '1yLo56xotUbdirQGvuITPYketISSZXsYq'
+MASTER_FILE_ID = '18plINq_UXDovZGCPT4XrqKHRRXYBaevK'  # 例如: '1B3d4E5f6G7h8I9j0K1lM'
 # =====================================================================
 
-st.title("🚛 四零四總部大樓 - 自動叫車排程系統")
+st.title("🚛自動叫車排程系統")
 
 # 檢查是否已設定 Google 金鑰
 if "GCP_KEY_JSON" not in st.secrets:
