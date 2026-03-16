@@ -2,43 +2,100 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from io import BytesIO
+import json
+
+# Google API 套件
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
 # 設定網頁標題與寬度
 st.set_page_config(page_title="叫車排程系統", page_icon="🚛", layout="wide")
 
 st.title("🚛自動叫車排程系統")
-st.markdown("請在下方上傳最新的 **構件管制表** 與 **出貨聯絡單**，系統將自動為您產出今日與本週的叫車總表。")
+st.markdown("系統將自動從您的 Google Drive 撈取最新資料並進行排程運算。")
 
-# 建立左右兩個上傳區塊
+# 檢查是否已設定 Google 金鑰
+if "GCP_KEY_JSON" not in st.secrets:
+    st.error("⚠️ 尚未設定 Google Drive API 金鑰！請至 Streamlit 後台的 Secrets 設定 `GCP_KEY_JSON`。")
+    st.stop()
+
+@st.cache_resource
+def get_gdrive_service():
+    """初始化 Google Drive API 服務"""
+    key_dict = json.loads(st.secrets["GCP_KEY_JSON"])
+    creds = service_account.Credentials.from_service_account_info(
+        key_dict, scopes=['https://www.googleapis.com/auth/drive.readonly']
+    )
+    return build('drive', 'v3', credentials=creds)
+
+def fetch_files_from_drive(folder_id, service):
+    """從指定的 Google Drive 資料夾下載 Excel/CSV 檔案到記憶體中"""
+    query = f"'{folder_id}' in parents and trashed=false"
+    try:
+        results = service.files().list(q=query, fields="files(id, name, mimeType)").execute()
+        items = results.get('files', [])
+        downloaded_files = []
+        for item in items:
+            # 只抓取 Excel 或 CSV 檔案
+            if item['name'].endswith(('.xlsx', '.csv', '.xls')):
+                request = service.files().get_media(fileId=item['id'])
+                fh = BytesIO()
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while done is False:
+                    status, done = downloader.next_chunk()
+                fh.seek(0)
+                downloaded_files.append({'name': item['name'], 'content': fh})
+        return downloaded_files
+    except Exception as e:
+        st.error(f"❌ 讀取資料夾 {folder_id} 失敗，請確認 ID 是否正確或是否有共用權限！錯誤：{e}")
+        return []
+
+# 建立兩個輸入框讓使用者填寫資料夾 ID (您可以把預設值改成您真實的 ID，以後就不用重填)
+st.markdown("### 📁 設定資料來源")
 col1, col2 = st.columns(2)
 with col1:
-    ctrl_files = st.file_uploader("📂 1. 請上傳「構件管制表」(可多選)", type=['xlsx', 'csv'], accept_multiple_files=True)
+    ctrl_folder_id = st.text_input("1. 「構件管制表」資料夾 ID", placeholder="1Cd8OWf6unmQP0qZax6jXMp3AdHaaEUDG")
 with col2:
-    ship_files = st.file_uploader("📂 2. 請上傳「出貨聯絡單」(可多選)", type=['xlsx', 'csv'], accept_multiple_files=True)
+    ship_folder_id = st.text_input("2. 「出貨聯絡單」資料夾 ID", placeholder="1k_pulQggY1BE1PMetbGaZ143U8jIItIU")
 
-if st.button("🚀 開始產生叫車排程", use_container_width=True, type="primary"):
-    if not ctrl_files or not ship_files:
-        st.warning("⚠️ 請確認「管制表」和「出貨單」都已經上傳喔！")
+if st.button("🚀 從 Google Drive 抓取並產生排程", use_container_width=True, type="primary"):
+    if not ctrl_folder_id or not ship_folder_id:
+        st.warning("⚠️ 請先填寫兩個資料夾的 ID 喔！")
     else:
-        with st.spinner("系統正在拼命讀取與運算中，請稍候..."):
+        with st.spinner("正在連線至 Google Drive 下載檔案並運算中，請稍候..."):
+            service = get_gdrive_service()
+            
+            # 雲端下載檔案
+            ctrl_files = fetch_files_from_drive(ctrl_folder_id.strip(), service)
+            ship_files = fetch_files_from_drive(ship_folder_id.strip(), service)
+
+            if not ctrl_files:
+                st.warning("⚠️ 在管制表資料夾中找不到 Excel/CSV 檔案。")
+            if not ship_files:
+                st.warning("⚠️ 在出貨單資料夾中找不到 Excel/CSV 檔案。")
+
             ctrl_dfs = []
             ship_dfs = []
 
             # 1. 處理管制表
-            for file in ctrl_files:
+            for file_data in ctrl_files:
                 try:
-                    # 判斷副檔名
-                    if file.name.endswith('.csv'):
-                        df_temp = pd.read_csv(file, nrows=20, header=None)
+                    file_name = file_data['name']
+                    file_content = file_data['content']
+                    
+                    if file_name.endswith('.csv'):
+                        df_temp = pd.read_csv(file_content, nrows=20, header=None)
                         flat_str = ' '.join(df_temp.fillna('').astype(str).values.flatten())
                         if '構件編號' in flat_str and '組立日期' in flat_str:
                             header_idx = df_temp[df_temp.apply(lambda r: r.astype(str).str.contains('構件編號').any(), axis=1)].index
                             if len(header_idx) > 0:
-                                file.seek(0)
-                                df_full = pd.read_csv(file, skiprows=header_idx[0])
+                                file_content.seek(0)
+                                df_full = pd.read_csv(file_content, skiprows=header_idx[0])
                                 ctrl_dfs.append(df_full)
                     else:
-                        xls_dict = pd.read_excel(file, sheet_name=None, header=None)
+                        xls_dict = pd.read_excel(file_content, sheet_name=None, header=None)
                         for sheet_name, df in xls_dict.items():
                             if df.empty: continue
                             head_df = df.head(20).fillna('').astype(str)
@@ -46,25 +103,28 @@ if st.button("🚀 開始產生叫車排程", use_container_width=True, type="pr
                             if '構件編號' in flat_str and '組立日期' in flat_str:
                                 header_idx = head_df[head_df.apply(lambda r: r.str.contains('構件編號').any(), axis=1)].index
                                 if len(header_idx) > 0:
-                                    df_full = pd.read_excel(file, sheet_name=sheet_name, skiprows=header_idx[0])
+                                    df_full = pd.read_excel(file_content, sheet_name=sheet_name, skiprows=header_idx[0])
                                     ctrl_dfs.append(df_full)
                 except Exception as e:
-                    st.error(f"讀取管制表時發生錯誤：{e}")
+                    st.error(f"讀取管制表 {file_name} 時發生錯誤：{e}")
 
             # 2. 處理出貨聯絡單
-            for file in ship_files:
+            for file_data in ship_files:
                 try:
-                    if file.name.endswith('.csv'):
-                        df_temp = pd.read_csv(file, nrows=20, header=None)
+                    file_name = file_data['name']
+                    file_content = file_data['content']
+                    
+                    if file_name.endswith('.csv'):
+                        df_temp = pd.read_csv(file_content, nrows=20, header=None)
                         flat_str = ' '.join(df_temp.fillna('').astype(str).values.flatten())
                         if '實際交貨日期' in flat_str and '批號' in flat_str:
                             header_idx = df_temp[df_temp.apply(lambda r: r.astype(str).str.contains('實際交貨日期').any(), axis=1)].index
                             if len(header_idx) > 0:
-                                file.seek(0)
-                                df_full = pd.read_csv(file, skiprows=header_idx[0])
+                                file_content.seek(0)
+                                df_full = pd.read_csv(file_content, skiprows=header_idx[0])
                                 ship_dfs.append(df_full)
                     else:
-                        xls_dict = pd.read_excel(file, sheet_name=None, header=None)
+                        xls_dict = pd.read_excel(file_content, sheet_name=None, header=None)
                         for sheet_name, df in xls_dict.items():
                             if df.empty: continue
                             head_df = df.head(20).fillna('').astype(str)
@@ -72,16 +132,16 @@ if st.button("🚀 開始產生叫車排程", use_container_width=True, type="pr
                             if '實際交貨日期' in flat_str and '批號' in flat_str:
                                 header_idx = head_df[head_df.apply(lambda r: r.str.contains('實際交貨日期').any(), axis=1)].index
                                 if len(header_idx) > 0:
-                                    df_full = pd.read_excel(file, sheet_name=sheet_name, skiprows=header_idx[0])
+                                    df_full = pd.read_excel(file_content, sheet_name=sheet_name, skiprows=header_idx[0])
                                     ship_dfs.append(df_full)
                 except Exception as e:
-                    st.error(f"讀取出貨單時發生錯誤：{e}")
+                    st.error(f"讀取出貨單 {file_name} 時發生錯誤：{e}")
 
             df_ctrl = pd.concat(ctrl_dfs, ignore_index=True) if ctrl_dfs else pd.DataFrame()
             df_ship = pd.concat(ship_dfs, ignore_index=True) if ship_dfs else pd.DataFrame()
 
             if df_ship.empty or df_ctrl.empty:
-                st.error("❌ 未找到有效的資料，請確認上傳的檔案內容是否正確。")
+                st.error("❌ 未能成功抓取並合併有效資料，請確認資料夾內是否有正確的檔案。")
             else:
                 # 3. 清理資料與合併
                 df_ship.columns = df_ship.columns.astype(str).str.strip()
@@ -130,13 +190,12 @@ if st.button("🚀 開始產生叫車排程", use_container_width=True, type="pr
 
                     df_merged = df_merged.rename(columns={'工程案號': '工程編號', '節數': '節次'})
 
-                    # 日期篩選 (今天與本週)
                     date_cols = ['組立日期', '焊接日期', '二檢日期', '噴漆施工日期', '叫車日期', '裝車日期', '工地需求日']
                     for c in date_cols:
                         if c in df_merged.columns:
                             df_merged[c] = pd.to_datetime(df_merged[c], errors='coerce')
 
-                    # 針對伺服器時區問題，自動抓取當前台灣時間作為今天
+                    # 今天與本週判定
                     today = pd.Timestamp.utcnow().tz_convert('Asia/Taipei').normalize().tz_localize(None)
                     start_of_week = today - pd.Timedelta(days=today.weekday())
                     end_of_week = start_of_week + pd.Timedelta(days=6)
@@ -152,10 +211,7 @@ if st.button("🚀 開始產生叫車排程", use_container_width=True, type="pr
                     if df_today.empty and df_week.empty:
                         st.info("🎉 太棒了！今天與本週目前都沒有需要叫車的排程。")
                     else:
-                        if df_today.empty:
-                            st.info(f"今天 ({today.strftime('%Y/%m/%d')}) 沒有需叫車排程，以下為您產出「本週」的清單。")
-                        else:
-                            st.success(f"✅ 成功計算完成！找到今天與本週的叫車排程。")
+                        st.success(f"✅ 成功從 Google Drive 讀取並計算完成！")
 
                         # 整理 Sheet 1: 今日叫車構件明細
                         sheet1_cols = ['工程編號', '工程區', '節次', '構件編號', '組立日期', '焊接日期', '二檢日期', '噴漆施工日期', '批號', '叫車日期', '裝車日期', '工地需求日']
@@ -177,16 +233,19 @@ if st.button("🚀 開始產生叫車排程", use_container_width=True, type="pr
                             df_sheet3 = df_sheet3.sort_values(by=['叫車日期', '塗裝廠商'])
                         df_sheet3 = df_sheet3[sheet2_cols]
 
-                        # 顯示在網頁上供預覽 (已補上今日廠商總表)
-                        if not df_sheet1.empty:
-                            st.subheader("📌 今日叫車構件明細 (預覽)")
-                            st.dataframe(df_sheet1, use_container_width=True)
+                        # ================= 依照您的需求，調整顯示順序 =================
                         if not df_sheet2.empty:
-                            st.subheader("🚚 今日叫車廠商總表 (預覽)")
+                            st.subheader("🚚 1. 今日叫車廠商總表 (預覽)")
                             st.dataframe(df_sheet2, use_container_width=True)
+                        
                         if not df_sheet3.empty:
-                            st.subheader("📅 本週叫車總表 (預覽)")
+                            st.subheader("📅 2. 本週叫車總表 (預覽)")
                             st.dataframe(df_sheet3, use_container_width=True)
+                            
+                        if not df_sheet1.empty:
+                            st.subheader("📌 3. 今日叫車構件明細 (預覽)")
+                            st.dataframe(df_sheet1, use_container_width=True)
+                        # ==============================================================
 
                         # 將 Excel 寫入記憶體中供下載
                         output = BytesIO()
