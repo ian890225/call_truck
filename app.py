@@ -4,17 +4,17 @@ import numpy as np
 from io import BytesIO
 
 # 設定網頁標題與寬度
-st.set_page_config(page_title="四零四案 - 叫車排程系統", page_icon="🚛", layout="wide")
+st.set_page_config(page_title="叫車排程系統", page_icon="🚛", layout="wide")
 
-st.title("🚛 四零四總部大樓 - 自動叫車排程系統")
+st.title("🚛自動叫車排程系統")
 st.markdown("請在下方上傳最新的 **構件管制表** 與 **出貨聯絡單**，系統將自動為您產出今日與本週的叫車總表。")
 
 # 建立左右兩個上傳區塊
 col1, col2 = st.columns(2)
 with col1:
-    ctrl_files = st.file_uploader("📂 1. 請上傳「構件管制表」(可多選)", type=['xlsx'], accept_multiple_files=True)
+    ctrl_files = st.file_uploader("📂 1. 請上傳「構件管制表」(可多選)", type=['xlsx', 'csv'], accept_multiple_files=True)
 with col2:
-    ship_files = st.file_uploader("📂 2. 請上傳「出貨聯絡單」(可多選)", type=['xlsx'], accept_multiple_files=True)
+    ship_files = st.file_uploader("📂 2. 請上傳「出貨聯絡單」(可多選)", type=['xlsx', 'csv'], accept_multiple_files=True)
 
 if st.button("🚀 開始產生叫車排程", use_container_width=True, type="primary"):
     if not ctrl_files or not ship_files:
@@ -27,32 +27,53 @@ if st.button("🚀 開始產生叫車排程", use_container_width=True, type="pr
             # 1. 處理管制表
             for file in ctrl_files:
                 try:
-                    xls_dict = pd.read_excel(file, sheet_name=None, header=None)
-                    for sheet_name, df in xls_dict.items():
-                        if df.empty: continue
-                        head_df = df.head(20).fillna('').astype(str)
-                        flat_str = ' '.join(head_df.values.flatten())
+                    # 判斷副檔名
+                    if file.name.endswith('.csv'):
+                        df_temp = pd.read_csv(file, nrows=20, header=None)
+                        flat_str = ' '.join(df_temp.fillna('').astype(str).values.flatten())
                         if '構件編號' in flat_str and '組立日期' in flat_str:
-                            header_idx = head_df[head_df.apply(lambda r: r.str.contains('構件編號').any(), axis=1)].index
+                            header_idx = df_temp[df_temp.apply(lambda r: r.astype(str).str.contains('構件編號').any(), axis=1)].index
                             if len(header_idx) > 0:
-                                df_full = pd.read_excel(file, sheet_name=sheet_name, skiprows=header_idx[0])
+                                file.seek(0)
+                                df_full = pd.read_csv(file, skiprows=header_idx[0])
                                 ctrl_dfs.append(df_full)
+                    else:
+                        xls_dict = pd.read_excel(file, sheet_name=None, header=None)
+                        for sheet_name, df in xls_dict.items():
+                            if df.empty: continue
+                            head_df = df.head(20).fillna('').astype(str)
+                            flat_str = ' '.join(head_df.values.flatten())
+                            if '構件編號' in flat_str and '組立日期' in flat_str:
+                                header_idx = head_df[head_df.apply(lambda r: r.str.contains('構件編號').any(), axis=1)].index
+                                if len(header_idx) > 0:
+                                    df_full = pd.read_excel(file, sheet_name=sheet_name, skiprows=header_idx[0])
+                                    ctrl_dfs.append(df_full)
                 except Exception as e:
                     st.error(f"讀取管制表時發生錯誤：{e}")
 
             # 2. 處理出貨聯絡單
             for file in ship_files:
                 try:
-                    xls_dict = pd.read_excel(file, sheet_name=None, header=None)
-                    for sheet_name, df in xls_dict.items():
-                        if df.empty: continue
-                        head_df = df.head(20).fillna('').astype(str)
-                        flat_str = ' '.join(head_df.values.flatten())
+                    if file.name.endswith('.csv'):
+                        df_temp = pd.read_csv(file, nrows=20, header=None)
+                        flat_str = ' '.join(df_temp.fillna('').astype(str).values.flatten())
                         if '實際交貨日期' in flat_str and '批號' in flat_str:
-                            header_idx = head_df[head_df.apply(lambda r: r.str.contains('實際交貨日期').any(), axis=1)].index
+                            header_idx = df_temp[df_temp.apply(lambda r: r.astype(str).str.contains('實際交貨日期').any(), axis=1)].index
                             if len(header_idx) > 0:
-                                df_full = pd.read_excel(file, sheet_name=sheet_name, skiprows=header_idx[0])
+                                file.seek(0)
+                                df_full = pd.read_csv(file, skiprows=header_idx[0])
                                 ship_dfs.append(df_full)
+                    else:
+                        xls_dict = pd.read_excel(file, sheet_name=None, header=None)
+                        for sheet_name, df in xls_dict.items():
+                            if df.empty: continue
+                            head_df = df.head(20).fillna('').astype(str)
+                            flat_str = ' '.join(head_df.values.flatten())
+                            if '實際交貨日期' in flat_str and '批號' in flat_str:
+                                header_idx = head_df[head_df.apply(lambda r: r.str.contains('實際交貨日期').any(), axis=1)].index
+                                if len(header_idx) > 0:
+                                    df_full = pd.read_excel(file, sheet_name=sheet_name, skiprows=header_idx[0])
+                                    ship_dfs.append(df_full)
                 except Exception as e:
                     st.error(f"讀取出貨單時發生錯誤：{e}")
 
@@ -60,7 +81,7 @@ if st.button("🚀 開始產生叫車排程", use_container_width=True, type="pr
             df_ship = pd.concat(ship_dfs, ignore_index=True) if ship_dfs else pd.DataFrame()
 
             if df_ship.empty or df_ctrl.empty:
-                st.error("❌ 未找到有效的資料，請確認上傳的 Excel 內容是否正確。")
+                st.error("❌ 未找到有效的資料，請確認上傳的檔案內容是否正確。")
             else:
                 # 3. 清理資料與合併
                 df_ship.columns = df_ship.columns.astype(str).str.strip()
@@ -136,27 +157,33 @@ if st.button("🚀 開始產生叫車排程", use_container_width=True, type="pr
                         else:
                             st.success(f"✅ 成功計算完成！找到今天與本週的叫車排程。")
 
-                        # 整理欄位
+                        # 整理 Sheet 1: 今日叫車構件明細
                         sheet1_cols = ['工程編號', '工程區', '節次', '構件編號', '組立日期', '焊接日期', '二檢日期', '噴漆施工日期', '批號', '叫車日期', '裝車日期', '工地需求日']
                         for c in sheet1_cols:
                             if c not in df_today.columns: df_today[c] = ''
                         df_sheet1 = df_today[sheet1_cols]
 
+                        # 整理 Sheet 2: 今日叫車廠商及批號
                         df_today['BOM數量'] = pd.to_numeric(df_today['BOM數量'] if 'BOM數量' in df_today.columns else 1, errors='coerce').fillna(0)
                         group_cols = ['塗裝廠商', '工程編號', '批號', '叫車日期', '裝車日期', '工地需求日']
-                        df_sheet2 = df_today.groupby(group_cols, as_index=False)['BOM數量'].sum().rename(columns={'BOM數量': '構件支數'})
+                        df_sheet2 = df_today.groupby(group_cols, dropna=False, as_index=False)['BOM數量'].sum().rename(columns={'BOM數量': '構件支數'})
                         sheet2_cols = ['塗裝廠商', '工程編號', '批號', '構件支數', '叫車日期', '裝車日期', '工地需求日']
                         df_sheet2 = df_sheet2[sheet2_cols]
 
+                        # 整理 Sheet 3: 本週叫車廠商及批號
                         df_week['BOM數量'] = pd.to_numeric(df_week['BOM數量'] if 'BOM數量' in df_week.columns else 1, errors='coerce').fillna(0)
-                        df_sheet3 = df_week.groupby(group_cols, as_index=False)['BOM數量'].sum().rename(columns={'BOM數量': '構件支數'})
-                        if not df_sheet3.empty: df_sheet3 = df_sheet3.sort_values(by=['叫車日期', '塗裝廠商'])
+                        df_sheet3 = df_week.groupby(group_cols, dropna=False, as_index=False)['BOM數量'].sum().rename(columns={'BOM數量': '構件支數'})
+                        if not df_sheet3.empty: 
+                            df_sheet3 = df_sheet3.sort_values(by=['叫車日期', '塗裝廠商'])
                         df_sheet3 = df_sheet3[sheet2_cols]
 
-                        # 顯示在網頁上供預覽
+                        # 顯示在網頁上供預覽 (已補上今日廠商總表)
                         if not df_sheet1.empty:
                             st.subheader("📌 今日叫車構件明細 (預覽)")
                             st.dataframe(df_sheet1, use_container_width=True)
+                        if not df_sheet2.empty:
+                            st.subheader("🚚 今日叫車廠商總表 (預覽)")
+                            st.dataframe(df_sheet2, use_container_width=True)
                         if not df_sheet3.empty:
                             st.subheader("📅 本週叫車總表 (預覽)")
                             st.dataframe(df_sheet3, use_container_width=True)
